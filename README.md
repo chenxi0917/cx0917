@@ -212,6 +212,24 @@ cpu0: starting 0
 
 特别是在 bootloader 阶段直接操作硬件（VGA 显存、键盘控制器、IDE 磁盘）的代码，让我对计算机底层有了更直观的认识。操作系统并不是魔法，而是一层一层搭建起来的软件架构。
 
+## 常见问题
+
+### Q: make qemu 报错怎么办？
+A: 确保安装了必要的工具：
+```bash
+# Ubuntu/Debian
+sudo apt-get install gcc make qemu-system-x86
+
+# 如果缺少 32 位库
+sudo apt-get install gcc-multilib
+```
+
+### Q: 启动信息看不到怎么办？
+A: 启动信息在屏幕最上方，可能被后续输出覆盖。可以使用串口输出查看：
+```bash
+make qemu-nox  # 使用串口而非 VGA 输出
+```
+
 ## 参考资料
 
 - [MIT 6.828 课程](https://pdos.csail.mit.edu/6.828/)
