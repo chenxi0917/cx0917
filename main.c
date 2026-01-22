@@ -1,3 +1,24 @@
+// =============================================================================
+// xv6 内核主函数 (main.c)
+// =============================================================================
+//
+// 【启动流程概述】
+// 这是 xv6 内核的 C 语言入口点。entry.S 启用分页并设置好栈后跳转到这里。
+// main() 函数负责初始化各个内核子系统，然后启动第一个用户进程。
+//
+// 【主要任务】
+// 1. 初始化物理内存分配器
+// 2. 初始化内核页表（虚拟内存）
+// 3. 初始化多处理器支持
+// 4. 初始化中断控制器和陷阱向量
+// 5. 初始化各种设备（控制台、磁盘等）
+// 6. 启动其他 CPU 核心
+// 7. 创建并运行第一个用户进程
+//
+// 【启动链路】
+// BIOS -> bootasm.S -> bootmain.c -> entry.S -> main.c (本文件)
+// =============================================================================
+
 #include "types.h"
 #include "defs.h"
 #include "param.h"
@@ -10,56 +31,196 @@ static void startothers(void);
 static void mpmain(void)  __attribute__((noreturn));
 extern pde_t *kpgdir;
 extern char end[]; // first address after kernel loaded from ELF file
+                   // 内核 ELF 文件加载后的第一个地址（内核结束地址）
 
+// =============================================================================
+// 【VGA 文本模式输出函数】
+// 在 console 初始化之前，直接写 VGA 显存来显示启动信息
+// =============================================================================
+static void
+early_puts(const char *s, int row)
+{
+  volatile ushort *vga = (volatile ushort*)(P2V(0xB8000));
+  int i = row * 80;  // 每行 80 个字符
+  
+  while(*s) {
+    if(*s == '\n') {
+      i = (i / 80 + 1) * 80;
+      s++;
+    } else {
+      vga[i++] = (0x0F << 8) | (*s++ & 0xFF);  // 白色前景
+    }
+  }
+}
+
+// =============================================================================
+// 【main - 内核主函数】
+// 启动处理器（BSP）从这里开始执行 C 代码
+// 分配一个真正的栈并切换到它，首先进行内存分配器所需的一些设置
+// =============================================================================
 // Bootstrap processor starts running C code here.
 // Allocate a real stack and switch to it, first
 // doing some setup required for memory allocator to work.
 int
 main(void)
 {
-  kinit1(end, P2V(4*1024*1024)); // phys page allocator
-  kvmalloc();      // kernel page table
-  mpinit();        // detect other processors
-  lapicinit();     // interrupt controller
-  seginit();       // segment descriptors
-  picinit();       // disable pic
-  ioapicinit();    // another interrupt controller
-  consoleinit();   // console hardware
-  uartinit();      // serial port
-  pinit();         // process table
-  tvinit();        // trap vectors
-  binit();         // buffer cache
-  fileinit();      // file table
-  ideinit();       // disk 
-  startothers();   // start other processors
+  // -------------------------------------------------------------------------
+  // 【打印启动信息】内核 main() 开始执行
+  // -------------------------------------------------------------------------
+  early_puts("[KERNEL] main() started", 4);  // 在第5行显示（前4行被 boot 阶段使用）
+
+  // -------------------------------------------------------------------------
+  // 【第一阶段内存初始化】
+  // 初始化物理页面分配器（仅初始化前 4MB）
+  // end 是内核结束地址，从这里到 4MB 可用于分配
+  // -------------------------------------------------------------------------
+  kinit1(end, P2V(4*1024*1024)); // phys page allocator  物理页分配器
+
+  // -------------------------------------------------------------------------
+  // 【内核页表初始化】
+  // 创建完整的内核页表，映射所有物理内存到高地址
+  // 替换 entry.S 中使用的简单 entrypgdir
+  // -------------------------------------------------------------------------
+  kvmalloc();      // kernel page table  内核页表
+
+  // -------------------------------------------------------------------------
+  // 【多处理器初始化】
+  // 检测系统中的其他 CPU 核心
+  // -------------------------------------------------------------------------
+  mpinit();        // detect other processors  检测其他处理器
+
+  // -------------------------------------------------------------------------
+  // 【中断控制器初始化】
+  // -------------------------------------------------------------------------
+  lapicinit();     // interrupt controller  本地 APIC 中断控制器
+
+  // -------------------------------------------------------------------------
+  // 【段描述符初始化】
+  // 设置 CPU 的段描述符表
+  // -------------------------------------------------------------------------
+  seginit();       // segment descriptors  段描述符
+
+  // -------------------------------------------------------------------------
+  // 【8259 PIC 禁用】
+  // xv6 使用 APIC，所以禁用旧的 8259 PIC
+  // -------------------------------------------------------------------------
+  picinit();       // disable pic  禁用 8259 PIC
+
+  // -------------------------------------------------------------------------
+  // 【I/O APIC 初始化】
+  // 初始化 I/O APIC，用于处理外部设备中断
+  // -------------------------------------------------------------------------
+  ioapicinit();    // another interrupt controller  I/O APIC
+
+  // -------------------------------------------------------------------------
+  // 【控制台初始化】
+  // 初始化控制台硬件，之后可以使用 cprintf 打印
+  // -------------------------------------------------------------------------
+  consoleinit();   // console hardware  控制台硬件
+
+  // -------------------------------------------------------------------------
+  // 【串口初始化】
+  // 初始化串行端口，用于调试输出
+  // -------------------------------------------------------------------------
+  uartinit();      // serial port  串口
+
+  // -------------------------------------------------------------------------
+  // 【进程表初始化】
+  // 初始化进程表的锁
+  // -------------------------------------------------------------------------
+  pinit();         // process table  进程表
+
+  // -------------------------------------------------------------------------
+  // 【陷阱向量初始化】
+  // 设置中断描述符表（IDT）
+  // -------------------------------------------------------------------------
+  tvinit();        // trap vectors  陷阱向量
+
+  // -------------------------------------------------------------------------
+  // 【缓冲区缓存初始化】
+  // 初始化磁盘块缓冲区
+  // -------------------------------------------------------------------------
+  binit();         // buffer cache  缓冲区缓存
+
+  // -------------------------------------------------------------------------
+  // 【文件表初始化】
+  // 初始化打开文件表
+  // -------------------------------------------------------------------------
+  fileinit();      // file table  文件表
+
+  // -------------------------------------------------------------------------
+  // 【磁盘初始化】
+  // 初始化 IDE 磁盘驱动
+  // -------------------------------------------------------------------------
+  ideinit();       // disk  磁盘
+
+  // -------------------------------------------------------------------------
+  // 【启动其他处理器】
+  // 向其他 CPU 发送启动信号
+  // -------------------------------------------------------------------------
+  startothers();   // start other processors  启动其他处理器
+
+  // -------------------------------------------------------------------------
+  // 【第二阶段内存初始化】
+  // 初始化剩余的物理内存（4MB 到 PHYSTOP）
+  // 必须在 startothers() 之后，因为其他 CPU 可能需要内存
+  // -------------------------------------------------------------------------
   kinit2(P2V(4*1024*1024), P2V(PHYSTOP)); // must come after startothers()
-  userinit();      // first user process
-  mpmain();        // finish this processor's setup
+                                           // 必须在启动其他处理器之后
+
+  // -------------------------------------------------------------------------
+  // 【创建第一个用户进程】
+  // 创建 init 进程，这是所有用户进程的祖先
+  // -------------------------------------------------------------------------
+  userinit();      // first user process  第一个用户进程
+
+  // -------------------------------------------------------------------------
+  // 【完成处理器设置】
+  // 进入调度器，开始运行进程
+  // -------------------------------------------------------------------------
+  mpmain();        // finish this processor's setup  完成此处理器的设置
 }
 
+// =============================================================================
+// 【mpenter - 其他 CPU 的入口】
+// 从 entryother.S 跳转过来，初始化应用处理器（AP）
+// =============================================================================
 // Other CPUs jump here from entryother.S.
+// 其他 CPU 从 entryother.S 跳转到这里
 static void
 mpenter(void)
 {
-  switchkvm();
-  seginit();
-  lapicinit();
-  mpmain();
+  switchkvm();     // 切换到内核页表
+  seginit();       // 设置段描述符
+  lapicinit();     // 初始化本地 APIC
+  mpmain();        // 进入调度器
 }
 
+// =============================================================================
+// 【mpmain - 通用 CPU 设置代码】
+// 所有 CPU（包括 BSP 和 AP）最终都会执行这个函数
+// 加载 IDT 并进入调度器
+// =============================================================================
 // Common CPU setup code.
+// 通用 CPU 设置代码
 static void
 mpmain(void)
 {
-  cprintf("cpu%d: starting %d\n", cpuid(), cpuid());
-  idtinit();       // load idt register
+  cprintf("cpu%d: starting %d\n", cpuid(), cpuid());  // 打印 CPU 启动信息
+  idtinit();       // load idt register  加载 IDT 寄存器
   xchg(&(mycpu()->started), 1); // tell startothers() we're up
-  scheduler();     // start running processes
+                                // 告诉 startothers() 我们已启动
+  scheduler();     // start running processes  开始运行进程（调度器）
 }
 
-pde_t entrypgdir[];  // For entry.S
+pde_t entrypgdir[];  // For entry.S  供 entry.S 使用的启动页目录
 
+// =============================================================================
+// 【startothers - 启动其他处理器】
+// 向所有 AP（应用处理器）发送启动命令
+// =============================================================================
 // Start the non-boot (AP) processors.
+// 启动非引导（AP）处理器
 static void
 startothers(void)
 {
@@ -68,32 +229,48 @@ startothers(void)
   struct cpu *c;
   char *stack;
 
+  // -------------------------------------------------------------------------
+  // 【复制 AP 启动代码】
+  // 将 entryother.S 的代码复制到物理地址 0x7000
+  // AP 必须从低地址启动（实模式限制）
+  // -------------------------------------------------------------------------
   // Write entry code to unused memory at 0x7000.
   // The linker has placed the image of entryother.S in
   // _binary_entryother_start.
   code = P2V(0x7000);
   memmove(code, _binary_entryother_start, (uint)_binary_entryother_size);
 
+  // -------------------------------------------------------------------------
+  // 【逐个启动其他 CPU】
+  // -------------------------------------------------------------------------
   for(c = cpus; c < cpus+ncpu; c++){
-    if(c == mycpu())  // We've started already.
+    if(c == mycpu())  // We've started already.  我们（BSP）已经启动了
       continue;
 
     // Tell entryother.S what stack to use, where to enter, and what
     // pgdir to use. We cannot use kpgdir yet, because the AP processor
     // is running in low  memory, so we use entrypgdir for the APs too.
-    stack = kalloc();
-    *(void**)(code-4) = stack + KSTACKSIZE;
-    *(void(**)(void))(code-8) = mpenter;
-    *(int**)(code-12) = (void *) V2P(entrypgdir);
+    // 告诉 entryother.S 使用什么栈、入口在哪里、使用什么页目录
+    // AP 处理器运行在低地址，所以也使用 entrypgdir
+    stack = kalloc();                           // 为 AP 分配栈
+    *(void**)(code-4) = stack + KSTACKSIZE;     // 栈顶地址
+    *(void(**)(void))(code-8) = mpenter;        // 入口函数
+    *(int**)(code-12) = (void *) V2P(entrypgdir); // 页目录物理地址
 
-    lapicstartap(c->apicid, V2P(code));
+    lapicstartap(c->apicid, V2P(code));         // 发送 STARTUP IPI 启动 AP
 
-    // wait for cpu to finish mpmain()
+    // wait for cpu to finish mpmain()  等待 CPU 完成 mpmain()
     while(c->started == 0)
       ;
   }
 }
 
+// =============================================================================
+// 【entrypgdir - 启动页目录】
+// entry.S 和 entryother.S 使用的启动页表
+// 页目录（和页表）必须从页边界开始，因此使用 __aligned__ 属性
+// 页目录项中的 PTE_PS 标志启用 4MB 大页
+// =============================================================================
 // The boot page table used in entry.S and entryother.S.
 // Page directories (and page tables) must start on page boundaries,
 // hence the __aligned__ attribute.
@@ -102,8 +279,10 @@ startothers(void)
 __attribute__((__aligned__(PGSIZE)))
 pde_t entrypgdir[NPDENTRIES] = {
   // Map VA's [0, 4MB) to PA's [0, 4MB)
+  // 将虚拟地址 [0, 4MB) 映射到物理地址 [0, 4MB) - 恒等映射
   [0] = (0) | PTE_P | PTE_W | PTE_PS,
   // Map VA's [KERNBASE, KERNBASE+4MB) to PA's [0, 4MB)
+  // 将虚拟地址 [KERNBASE, KERNBASE+4MB) 映射到物理地址 [0, 4MB)
   [KERNBASE>>PDXSHIFT] = (0) | PTE_P | PTE_W | PTE_PS,
 };
 
@@ -113,4 +292,3 @@ pde_t entrypgdir[NPDENTRIES] = {
 // Blank page.
 //PAGEBREAK!
 // Blank page.
-
