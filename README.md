@@ -221,7 +221,28 @@ cpu0: starting 0
 
 ## 作者
 
-ShangLulu
+chenxi0917
+
+## 调试技巧
+
+### 使用 GDB 调试启动过程
+
+```bash
+# 终端 1：启动 QEMU 等待调试器连接
+make qemu-gdb
+
+# 终端 2：启动 GDB
+gdb kernel
+(gdb) target remote localhost:26000
+(gdb) b bootmain      # 在 bootmain 设置断点
+(gdb) c               # 继续执行
+```
+
+### 关键断点位置
+- `bootmain`: 引导加载器入口
+- `entry`: 内核入口
+- `main`: 内核 main 函数
+- `scheduler`: 进程调度器
 
 ## 许可证
 
