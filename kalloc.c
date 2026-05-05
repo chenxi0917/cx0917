@@ -64,33 +64,40 @@ kfree(char *v)
   if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
     panic("kfree");
 
+  // 打印释放日志（在真正释放前）
+  cprintf("[MEM] free page at %p\n", v);
+
   // Fill with junk to catch dangling refs.
   memset(v, 1, PGSIZE);
 
-  if(kmem.use_lock)
-    acquire(&kmem.lock);
   r = (struct run*)v;
+
+  acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
-  if(kmem.use_lock)
-    release(&kmem.lock);
+  release(&kmem.lock);
 }
-
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
+
 char*
 kalloc(void)
 {
   struct run *r;
 
-  if(kmem.use_lock)
-    acquire(&kmem.lock);
+  acquire(&kmem.lock);
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
-  if(kmem.use_lock)
-    release(&kmem.lock);
+  release(&kmem.lock);
+
+  if(r){
+    memset((char*)r, 5, PGSIZE); // fill with junk
+    cprintf("[MEM] alloc page at %p\n", r);    // 新增：分配日志
+  } else {
+    cprintf("[MEM] alloc failed: no free page\n"); // 可选：分配失败
+  }
+
   return (char*)r;
 }
-

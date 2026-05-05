@@ -10,6 +10,8 @@
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
+  struct proc *proc;
+  struct cpu *cpu;
 } ptable;
 
 static struct proc *initproc;
@@ -319,13 +321,13 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+
+
 void
 scheduler(void)
 {
   struct proc *p;
-  struct cpu *c = mycpu();
-  c->proc = 0;
-  
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -336,24 +338,30 @@ scheduler(void)
       if(p->state != RUNNABLE)
         continue;
 
+      // 调度前日志：准备切换到哪个进程
+      cprintf("[SCHED] switch to pid=%d, name=%s\n", p->pid, p->name);
+
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
-      c->proc = p;
+      proc = p;
       switchuvm(p);
       p->state = RUNNING;
-
-      swtch(&(c->scheduler), p->context);
+      swtch(&cpu->scheduler, proc->context);
       switchkvm();
+
+      // 调度后日志：从哪个进程返回，当前状态
+      cprintf("[SCHED] back from pid=%d, name=%s, state=%d\n",
+              p->pid, p->name, p->state);
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
-      c->proc = 0;
+      proc = 0;
     }
     release(&ptable.lock);
-
   }
 }
+
 
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
