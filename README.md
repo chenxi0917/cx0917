@@ -271,3 +271,82 @@ gdb kernel
 
 本项目基于 MIT xv6，采用 MIT 许可证。
 
+
+
+# xv6 内核运行机制实践实验报告
+
+## 一、实验环境
+
+- 操作系统：Windows 11 + WSL2 Ubuntu 22.04
+- 编译器：gcc (x86, `gcc -m32`)
+- 模拟器：qemu-system-x86
+- 实验代码：课程提供的 xv6（x86 版本），个人仓库：https://github.com/chenxi0917/cx0917
+
+---
+
+## 二、实验内容与完成情况
+
+本次实验主要围绕 xv6 的内核执行机制展开，通过阅读源码并插入调试输出，理解系统调用、调度和内存分配等关键路径，同时完成一个简单的系统调用扩展。
+
+### 1. 第一层：机制观察（必做）
+
+1. **任务 1：系统调用路径跟踪（write）**  
+   - 在用户态编写测试程序 `mywrite`，调用 `write()`。
+   - 在 `syscall.c` 的 `syscall()` 函数中加入日志：  
+     `cprintf("[KERNEL] enter syscall %d\n", num);`
+   - 在 `sysfile.c` 的 `sys_write()` 中加入日志：  
+     `cprintf("[KERNEL] sys_write invoked\n");`
+   - 运行 `mywrite` 时，能够看到从用户态到内核态的完整调用链。
+
+2. **任务 2：调度过程观察**  
+   - 在 `proc.c` 的 `scheduler()` 函数中，在切换进程前后加入日志，例如：  
+     ```c
+     cprintf("[SCHED] switch to pid=%d, name=%s\n", p->pid, p->name);
+     ...
+     cprintf("[SCHED] back from pid=%d, name=%s, state=%d\n",
+             p->pid, p->name, p->state);
+     ```
+   - 运行 `ls`、`forktest` 等程序时，可以观察到不同进程的调度顺序和状态变化。
+
+3. **任务 3：内存分配观察（kalloc/kfree）**  
+   - 在 `kalloc.c` 的 `kalloc()` 中加入日志：  
+     `cprintf("[MEM] alloc page at %p\n", r);`
+   - 在 `kalloc.c` 的 `kfree()` 中加入日志：  
+     `cprintf("[MEM] free page at %p\n", v);`
+   - 通过运行多个用户程序，观察物理页的分配与回收情况（地址是否连续、是否复用等）。
+
+### 2. 第二层：机制理解（已完成任务）
+
+1. **任务 1：新增简单系统调用 `hello()`**（推荐任务）  
+   - 在 `syscall.h` 中新增系统调用号：  
+     `#define SYS_hello  21`（具体编号按当前最大值 +1）
+   - 在 `sysproc.c` 中实现内核处理函数：  
+     ```c
+     int
+     sys_hello(void)
+     {
+       cprintf("hello from kernel, pid=%d\n", proc->pid);
+       return 0;
+     }
+     ```
+   - 在 `syscall.c` 中：
+     - 声明：`extern int sys_hello(void);`
+     - 在 `syscalls[]` 数组中注册：`[SYS_hello]  sys_hello,`
+   - 在 `user.h` 中声明用户接口：`int hello(void);`
+   - 在 `usys.S` 中添加封装：`SYSCALL(hello)`
+   - 编写测试程序 `hello_test.c` 调用 `hello()` 并打印返回结果。
+
+> 第三层同步模型构建任务暂未完成（如有完成可在此补充说明：如简化的生产者-消费者模型、使用自旋锁和 sleep/wakeup 等）。
+
+---
+
+## 三、关键任务实现与运行结果
+
+### 1. 系统调用路径跟踪（任务 1）
+
+**实现思路：**
+
+- 在用户程序 `mywrite.c` 中打印用户态信息并调用 `write`：
+  ```c
+  printf(1, "[USER] calling write\n");
+  write(1, "hello from mywrite\n", 19);
